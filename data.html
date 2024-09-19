@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataLake Comparison</title>
+
+  <!-- Link to Bootstrap for better styling -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Custom CSS for additional styling -->
+  <style>
+    body {
+      font-family: "Lucida Console", "Courier New", monospace;
+      background-color: #f8f9fa;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+	  font-size: 0.8rem;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: auto;
+      padding: 20px;
+      background-color: #fff;
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+      color: #007bff;
+    }
+
+    .table {
+      margin-bottom: 0;
+    }
+
+    .table th, .table td {
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .mismatch {
+      background-color: #ff4d4d !important;
+      color: white !important;
+    }
+
+    .matched {
+      background-color: #c3e6cb !important;
+      color: #155724;
+    }
+
+    .footer {
+      text-align: center;
+      padding: 10px;
+      margin-top: 20px;
+      font-size: 0.9rem;
+      color: #777;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">    
+    <table class="table table-bordered table-hover">
+      <thead class="table-primary">
+        <tr>
+          <th>Snapshot</th>
+          <th>Subject</th>
+          <th>Original Message ID</th> <!-- New column added -->
+          <th>Records(ADU)</th>
+          <th>Records(Lake)</th>
+          <th>Started</th>
+          <th>Completed</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody id="comparisonTableBody">
+        <!-- Rows will be inserted dynamically -->
+      </tbody>
+    </table>
+
+  </div>
+
+  <script>
+    const db1Data = [
+      { snapshot: 'eod', subject: 'taxlots', records_count: 100, started: '2024-09-19 02:00:00', completed: '2024-09-19 04:00:00', duration: '02:00' },
+      { snapshot: 'eod', subject: 'positions', records_count: 100, started: '2024-09-19 02:00:00', completed: '2024-09-19 05:00:00', duration: '03:00' },
+      { snapshot: 'eod', subject: 'disposal_lots', records_count: 100, started: '2024-09-19 02:00:00', completed: '2024-09-19 01:00:00', duration: '01:00' },
+      { snapshot: 'sod', subject: 'disposal_lots', records_count: 50, started: '2024-09-19 02:00:00', completed: '2024-09-19 01:00:00', duration: '01:00' }
+    ];
+
+    const db2Data = [
+      { snapshot: 'eod', subject: 'taxlots', records_count: 100, started: '2024-09-19 02:00:00', completed: '2024-09-19 04:00:00', duration: '02:00' },
+      { snapshot: 'eod', subject: 'positions', records_count: 90, started: '2024-09-19 02:00:00', completed: '2024-09-19 05:00:00', duration: '03:00' },
+      { snapshot: 'eod', subject: 'disposal_lots', records_count: 100, started: '2024-09-19 02:00:00', completed: '2024-09-19 01:00:00', duration: '01:00' },
+      { snapshot: 'sod', subject: 'disposal_lots', records_count: 40, started: '2024-09-19 02:00:00', completed: '2024-09-19 01:00:00', duration: '01:00' }
+    ];
+
+    const originalMessageId = '000-1111-2222-3333'; // New column value
+
+    function compareData(db1, db2) {
+      const tableBody = document.querySelector('#comparisonTableBody');
+
+      db1.forEach(item1 => {
+        const item2 = db2.find(item => item.snapshot === item1.snapshot && item.subject === item1.subject);
+        const row = document.createElement('tr');
+
+        const snapshotCell = document.createElement('td');
+        snapshotCell.textContent = item1.snapshot;
+        row.appendChild(snapshotCell);
+
+        const subjectCell = document.createElement('td');
+        subjectCell.textContent = item1.subject;
+        row.appendChild(subjectCell);
+
+        // New column for Original Message ID
+        const messageIdCell = document.createElement('td');
+        messageIdCell.textContent = originalMessageId;
+        row.appendChild(messageIdCell);
+
+        const db1RecordsCell = document.createElement('td');
+        db1RecordsCell.textContent = item1.records_count;
+        row.appendChild(db1RecordsCell);
+
+        const db2RecordsCell = document.createElement('td');
+        db2RecordsCell.textContent = item2 ? item2.records_count : 'Not Found';
+        row.appendChild(db2RecordsCell);
+
+        const startedCell = document.createElement('td');
+        startedCell.textContent = item1.started;
+        row.appendChild(startedCell);
+
+        const completedCell = document.createElement('td');
+        completedCell.textContent = item1.completed;
+        row.appendChild(completedCell);
+
+        const durationCell = document.createElement('td');
+        durationCell.textContent = item1.duration;
+        row.appendChild(durationCell);
+
+        // Highlight in red if records_count doesn't match, else green
+        if (item2 && item1.records_count !== item2.records_count) {
+          db1RecordsCell.classList.add('mismatch');
+          db2RecordsCell.classList.add('mismatch');
+        } else if (item2 && item1.records_count === item2.records_count) {
+          db1RecordsCell.classList.add('matched');
+          db2RecordsCell.classList.add('matched');
+        }
+
+        tableBody.appendChild(row);
+      });
+    }
+
+    compareData(db1Data, db2Data);
+  </script>
+
+  <!-- Link to Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
