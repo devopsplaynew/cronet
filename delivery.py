@@ -1,5 +1,5 @@
-# Function to generate HTML table with status highlights
 import csv
+# Function to generate HTML table with status highlights and filters
 def generate_html(input_file, output_file, html_file):
     # Read the output file into a dictionary for quick lookup
     output_data = {}
@@ -7,9 +7,9 @@ def generate_html(input_file, output_file, html_file):
         output_reader = csv.DictReader(output_csv)
         for row in output_reader:
             key = (row['client_cd'], row['region_cd'], row['subject_Area'], row['snapshot'])
-            output_data[key] = row['status']
+            output_data[key] = {'status': row['status'], 'max': row['max'], 'count': row['count']}
     
-    # Start HTML content with improved CSS
+    # Start HTML content with improved CSS and filters
     html_content = '''
     <html>
     <head>
@@ -58,31 +58,63 @@ def generate_html(input_file, output_file, html_file):
             tr:hover {
                 background-color: #f1f1f1;
             }
+            .filter-input {
+                width: 95%;
+                padding: 5px;
+                margin-bottom: 5px;
+                text-align: center;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+            }
         </style>
+        <script>
+            function filterTable(columnIndex) {
+                var input, filter, table, tr, td, i, txtValue;
+                input = document.getElementsByClassName("filter-input")[columnIndex];
+                filter = input.value.toUpperCase();
+                table = document.getElementById("statusTable");
+                tr = table.getElementsByTagName("tr");
+
+                for (i = 1; i < tr.length; i++) {
+                    td = tr[i].getElementsByTagName("td")[columnIndex];
+                    if (td) {
+                        txtValue = td.textContent || td.innerText;
+                        if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                            tr[i].style.display = "";
+                        } else {
+                            tr[i].style.display = "none";
+                        }
+                    }
+                }
+            }
+        </script>
     </head>
     <body>
         <h2 style="text-align:center;">Workflow Status Report</h2>
-        <table>
+
+        <table id="statusTable">
             <tr>
-                <th>Client Code</th>
-                <th>Region Code</th>
-                <th>Subject Area</th>
-                <th>Snapshot</th>
-                <th>Status</th>
+                <th>Client Code<br><input type="text" class="filter-input" onkeyup="filterTable(0)" placeholder="Filter by Client Code"></th>
+                <th>Region Code<br><input type="text" class="filter-input" onkeyup="filterTable(1)" placeholder="Filter by Region Code"></th>
+                <th>Subject Area<br><input type="text" class="filter-input" onkeyup="filterTable(2)" placeholder="Filter by Subject Area"></th>
+                <th>Snapshot<br><input type="text" class="filter-input" onkeyup="filterTable(3)" placeholder="Filter by Snapshot"></th>
+                <th>Status<br><input type="text" class="filter-input" onkeyup="filterTable(4)" placeholder="Filter by Status"></th>
+                <th>Max<br><input type="text" class="filter-input" onkeyup="filterTable(5)" placeholder="Filter by Max"></th>
+                <th>Count<br><input type="text" class="filter-input" onkeyup="filterTable(6)" placeholder="Filter by Count"></th>
             </tr>
     '''
 
-    # Process the input file and compare with the output
+    # Process the input file and ensure all rows are shown, even if not in the output
     with open(input_file, 'r') as input_csv:
         input_reader = csv.DictReader(input_csv)
         for row in input_reader:
             key = (row['client_cd'], row['region_cd'], row['subject_Area'], row['snapshot'])
-            status = output_data.get(key, 'pending')  # Default to pending if not found
+            output_row = output_data.get(key, {'status': 'pending', 'max': '-', 'count': '-'})  # Default to pending if not found
 
             # Determine the status class for coloring
-            if status == 'success':
+            if output_row['status'] == 'success':
                 status_class = 'success'
-            elif status == 'failed':
+            elif output_row['status'] == 'failed':
                 status_class = 'failed'
             else:
                 status_class = 'pending'
@@ -94,7 +126,9 @@ def generate_html(input_file, output_file, html_file):
                 <td>{row['region_cd']}</td>
                 <td>{row['subject_Area']}</td>
                 <td>{row['snapshot']}</td>
-                <td class="{status_class}">{status}</td>
+                <td class="{status_class}">{output_row['status']}</td>
+                <td>{output_row['max']}</td>
+                <td>{output_row['count']}</td>
             </tr>
             '''
 
