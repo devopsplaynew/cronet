@@ -1,7 +1,7 @@
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Load the two CSV files
+# Load SLA and received CSV files
 sla_file = "sla.csv"
 received_file = "received.csv"
 
@@ -9,18 +9,26 @@ sla_df = pd.read_csv(sla_file)
 received_df = pd.read_csv(received_file)
 
 # Convert SLA and created times to datetime.time for comparison
-sla_df['SLA'] = pd.to_datetime(sla_df['SLA'], format='%H:%M').dt.time
+sla_df['SLA'] = pd.to_datetime(sla_df['SLA'], format='%H:%M', errors='coerce').dt.time
 received_df['created'] = pd.to_datetime(received_df['created'], format='%H:%M', errors='coerce').dt.time
 
-# Add today's date to the SLA file
-current_date = datetime.now().strftime('%Y-%m-%d')
-sla_today_df = sla_df.copy()
-sla_today_df['bussiness_date'] = current_date
+# Ensure bussiness_date in received_df is datetime format
+received_df['bussiness_date'] = pd.to_datetime(received_df['bussiness_date'], format='%Y-%m-%d', errors='coerce')
 
-# Merge SLA with received data for both historical and today's date
-sla_df['bussiness_date'] = received_df['bussiness_date']  # Historical SLA rows
+# Generate unique business dates, including the current date
+unique_dates = received_df['bussiness_date'].dropna().unique()
+current_date = datetime.now().strftime('%Y-%m-%d')
+unique_dates = pd.to_datetime(list(unique_dates) + [current_date])
+
+# Expand SLA data for all business dates
+sla_expanded = sla_df.merge(
+    pd.DataFrame(unique_dates, columns=['bussiness_date']),
+    how='cross'
+)
+
+# Merge expanded SLA data with received data
 merged_df = pd.merge(
-    pd.concat([sla_df, sla_today_df]),
+    sla_expanded,
     received_df,
     on=['client', 'region', 'marker', 'bussiness_date'],
     how='left'
@@ -28,31 +36,34 @@ merged_df = pd.merge(
 
 # Function to determine SLA status
 def determine_status(row):
-    sla_time = datetime.strptime(str(row['SLA']), "%H:%M:%S").time()
+    sla_time = row['SLA']
+    created_time = row['created']
+    current_date_obj = pd.to_datetime(current_date)
     
-    # If no `created` time exists
-    if pd.isnull(row['created']):
-        current_time = datetime.now().time()
-        # Today's date - mark as Pending
-        if row['bussiness_date'] == current_date and current_time <= sla_time:
-            return "Pending"
-        # Otherwise, SLA is breached
-        return "Missed"
-    # Compare created and SLA times
-    return "Met" if row['created'] <= sla_time else "Missed"
+    # No created time exists
+    if pd.isnull(created_time):
+        if row['bussiness_date'] == current_date_obj:  # For today's date
+            current_time = datetime.now().time()
+            if current_time <= sla_time:  # SLA time hasn't passed
+                return "Pending"
+            return "Missed"
+        return "Missed"  # Historical dates without created time
 
-# Apply status determination
+    # Compare created time with SLA time
+    return "Met" if created_time <= sla_time else "Missed"
+
+# Apply SLA comparison logic
 merged_df['status'] = merged_df.apply(determine_status, axis=1)
 
-# Final Output Columns
+# Final output columns
 output_columns = ['client', 'region', 'bussiness_date', 'marker', 'SLA', 'created', 'status']
 output_df = merged_df[output_columns]
 
-# Sort by business_date descending
+# Sort the output by business_date descending
 output_df['bussiness_date'] = pd.to_datetime(output_df['bussiness_date'], format='%Y-%m-%d')
-output_df = output_df.sort_values(by='bussiness_date', ascending=False)
+output_df = output_df.sort_values(by=['bussiness_date', 'client', 'region', 'marker'], ascending=[False, True, True, True])
 
-# Create HTML with filters, sorting, and improved styling
+# Generate HTML output with filters and status-specific column coloring
 html_content = """
 <!DOCTYPE html>
 <html lang="en">
@@ -141,20 +152,19 @@ html_content = """
         <tbody>
 """
 
-# Add table rows from the data with color formatting for the status column
+# Add rows with status-specific coloring only in the status column
 for _, row in output_df.iterrows():
-    status = row['status'].lower()
-    row_class = 'status-pending' if status == 'pending' else 'status-missed' if status == 'missed' else 'status-met'
+    status_class = f"status-{row['status'].lower()}"
     html_content += f"""
-            <tr>
-                <td>{row['client']}</td>
-                <td>{row['region']}</td>
-                <td>{row['bussiness_date']}</td>
-                <td>{row['marker']}</td>
-                <td>{row['SLA']}</td>
-                <td>{row['created']}</td>
-                <td class="{row_class}">{status.capitalize()}</td>
-            </tr>
+        <tr>
+            <td>{row['client']}</td>
+            <td>{row['region']}</td>
+            <td>{row['bussiness_date'].strftime('%Y-%m-%d')}</td>
+            <td>{row['marker']}</td>
+            <td>{row['SLA']}</td>
+            <td>{row['created'] if pd.notnull(row['created']) else ''}</td>
+            <td class="{status_class}">{row['status']}</td>
+        </tr>
     """
 
 html_content += """
@@ -164,9 +174,9 @@ html_content += """
 </html>
 """
 
-# Save the final HTML file
+# Save the HTML report
 html_output_file = "sla_comparison.html"
 with open(html_output_file, "w") as file:
     file.write(html_content)
 
-print(f"Formatted HTML file with filters has been created: {html_output_file}")
+print(f"SLA comparison report generated: {html_output_file}")
