@@ -21,10 +21,10 @@ current_date = datetime.now().strftime('%Y-%m-%d')
 unique_dates = pd.to_datetime(list(unique_dates) + [current_date])
 
 # Expand SLA data for all business dates
-sla_expanded = sla_df.merge(
-    pd.DataFrame(unique_dates, columns=['bussiness_date']),
-    how='cross'
-)
+sla_expanded = sla_df.assign(key=1).merge(
+    pd.DataFrame(unique_dates, columns=['bussiness_date']).assign(key=1),
+    on='key'
+).drop('key', axis=1)
 
 # Merge expanded SLA data with received data
 merged_df = pd.merge(
@@ -44,7 +44,10 @@ def determine_status(row):
     if pd.isnull(created_time):
         if row['bussiness_date'] == current_date_obj:  # For today's date
             current_time = datetime.now().time()
-            if current_time <= sla_time:  # SLA time hasn't passed
+            time_diff = datetime.combine(current_date_obj, sla_time) - datetime.now()
+            if current_time <= sla_time:
+                if time_diff.total_seconds() <= 300:  # 5 minutes in seconds
+                    return "Warning"
                 return "Pending"
             return "Missed"
         return "Missed"  # Historical dates without created time
@@ -63,7 +66,7 @@ output_df = merged_df[output_columns]
 output_df['bussiness_date'] = pd.to_datetime(output_df['bussiness_date'], format='%Y-%m-%d')
 output_df = output_df.sort_values(by=['bussiness_date', 'client', 'region', 'marker'], ascending=[False, True, True, True])
 
-# Generate HTML output with filters and status-specific column coloring
+# Generate HTML output with filters, sorting, and status-specific column coloring
 html_content = """
 <!DOCTYPE html>
 <html lang="en">
@@ -94,6 +97,7 @@ html_content = """
             background-color: #4CAF50;
             color: white;
             text-align: center;
+            cursor: pointer;
         }
         tr:nth-child(even) {
             background-color: #f2f2f2;
@@ -117,6 +121,10 @@ html_content = """
         .status-met {
             background-color: lightgreen;
         }
+        .status-warning {
+            background-color: orange;
+            color: white;
+        }
     </style>
     <script>
         function filterTable(columnIndex) {
@@ -132,6 +140,41 @@ html_content = """
                 }
             }
         }
+
+        function sortTable(columnIndex) {
+            var table = document.getElementById("slaTable");
+            var rows = Array.from(table.getElementsByTagName("tr")).slice(1); // Exclude header row
+            var isAscending = table.getAttribute("data-sort-order") === "asc";
+            rows.sort(function(rowA, rowB) {
+                var cellA = rowA.getElementsByTagName("td")[columnIndex].innerText.toLowerCase();
+                var cellB = rowB.getElementsByTagName("td")[columnIndex].innerText.toLowerCase();
+                if (!isNaN(Date.parse(cellA)) && !isNaN(Date.parse(cellB))) { // For dates
+                    return isAscending
+                        ? new Date(cellA) - new Date(cellB)
+                        : new Date(cellB) - new Date(cellA);
+                }
+                return isAscending
+                    ? cellA.localeCompare(cellB)
+                    : cellB.localeCompare(cellA);
+            });
+            rows.forEach(row => table.appendChild(row)); // Re-append rows in sorted order
+            table.setAttribute("data-sort-order", isAscending ? "desc" : "asc");
+        }
+
+        function checkForWarnings() {
+            var table = document.getElementById('slaTable');
+            var rows = table.getElementsByTagName('tr');
+            for (var i = 1; i < rows.length; i++) {
+                var statusCell = rows[i].getElementsByTagName('td')[6];
+                if (statusCell && statusCell.innerText === "Warning") {
+                    alert("Warning: SLA is about to breach!");
+                    break;
+                }
+            }
+        }
+
+        // Call the function on page load
+        window.onload = checkForWarnings;
     </script>
 </head>
 <body>
@@ -140,13 +183,13 @@ html_content = """
     <table id="slaTable">
         <thead>
             <tr>
-                <th>Client<br><input class="filter-input" type="text" id="filter-0" onkeyup="filterTable(0)" placeholder="Search Client"></th>
-                <th>Region<br><input class="filter-input" type="text" id="filter-1" onkeyup="filterTable(1)" placeholder="Search Region"></th>
-                <th>Business Date<br><input class="filter-input" type="text" id="filter-2" onkeyup="filterTable(2)" placeholder="Search Date"></th>
-                <th>Marker<br><input class="filter-input" type="text" id="filter-3" onkeyup="filterTable(3)" placeholder="Search Marker"></th>
-                <th>SLA<br><input class="filter-input" type="text" id="filter-4" onkeyup="filterTable(4)" placeholder="Search SLA"></th>
-                <th>Created<br><input class="filter-input" type="text" id="filter-5" onkeyup="filterTable(5)" placeholder="Search Created"></th>
-                <th>Status<br><input class="filter-input" type="text" id="filter-6" onkeyup="filterTable(6)" placeholder="Search Status"></th>
+                <th onclick="sortTable(0)">Client<br><input class="filter-input" type="text" id="filter-0" onkeyup="filterTable(0)" placeholder="Search Client"></th>
+                <th onclick="sortTable(1)">Region<br><input class="filter-input" type="text" id="filter-1" onkeyup="filterTable(1)" placeholder="Search Region"></th>
+                <th onclick="sortTable(2)">Business Date<br><input class="filter-input" type="text" id="filter-2" onkeyup="filterTable(2)" placeholder="Search Date"></th>
+                <th onclick="sortTable(3)">Marker<br><input class="filter-input" type="text" id="filter-3" onkeyup="filterTable(3)" placeholder="Search Marker"></th>
+                <th onclick="sortTable(4)">SLA<br><input class="filter-input" type="text" id="filter-4" onkeyup="filterTable(4)" placeholder="Search SLA"></th>
+                <th onclick="sortTable(5)">Created<br><input class="filter-input" type="text" id="filter-5" onkeyup="filterTable(5)" placeholder="Search Created"></th>
+                <th onclick="sortTable(6)">Status<br><input class="filter-input" type="text" id="filter-6" onkeyup="filterTable(6)" placeholder="Search Status"></th>
             </tr>
         </thead>
         <tbody>
