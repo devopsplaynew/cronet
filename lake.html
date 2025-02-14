@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lake Validation with Inputs</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* General Styles */
+    body {
+      font-family: 'Roboto', sans-serif;
+      background-color: #f8f9fa;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+      font-size: 0.95rem;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+      color: #007bff;
+      font-weight: 700;
+      font-size: 2.5rem;
+    }
+
+    .container {
+      max-width: 1650px;
+      margin: auto;
+      padding: 20px;
+      background-color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      border-radius: 12px;
+    }
+
+    /* Form Section */
+    .form-container {
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      background-color: #a3c1ad;
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    select, input[type="date"], button {
+      padding: 10px;
+      border-radius: 8px;
+      border: 2px solid #ced4da;
+      font-size: 16px;
+      transition: all 0.3s ease;
+    }
+
+    select:focus, input[type="date"]:focus {
+      border-color: #007bff;
+      box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
+    }
+
+    button {
+      background-color: #007bff;
+      color: white;
+      cursor: pointer;
+      border: none;
+      font-weight: 500;
+      padding: 10px 20px;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+      transform: translateY(-1px);
+    }
+
+    /* Table Styles */
+    .table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-top: 20px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .table th, .table td {
+      padding: 12px;
+      text-align: center;
+      vertical-align: middle;
+      border: 1px solid #dee2e6;
+    }
+
+    .table th {
+      background-color: #a3c1ad;
+      color: white;
+      font-weight: 600;
+    }
+
+    .table tbody tr:hover {
+      background-color: #f1f1f1;
+      transition: background-color 0.3s ease;
+    }
+
+    /* Status Column Styles */
+    .status-mismatch {
+      background-color: #ff4d4d !important;
+      color: white !important;
+      font-weight: 500;
+    }
+
+    .status-matched {
+      background-color: #c3e6cb !important;
+      color: #155724;
+      font-weight: 500;
+    }
+
+    /* Input Filters */
+    input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      box-sizing: border-box;
+      border: 2px solid #ced4da;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.3s ease;
+    }
+
+    input[type="text"]:focus {
+      border-color: #007bff;
+      box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
+    }
+
+    /* Responsive Design */
+    @media (max-width: 768px) {
+      .form-container {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      select, input[type="date"], button {
+        width: 100%;
+      }
+
+      .table th, .table td {
+        padding: 8px;
+        font-size: 14px;
+      }
+    }
+  </style>
+
+  <script>
+    // Hardcoded JSON data for testing
+    const testData = {
+      "adm": [
+        {
+          "originalMessageId": "d4khjhd-ja5kjhsf-ksjfkj8-jsnfknf",
+          "subject_area": "taxlots",
+          "snapshottypecd": "EOD",
+          "messages": 223,
+          "records": 10002
+        },
+        {
+          "originalMessageId": "d4khjhd-ja5kjhsf-ksjfkj8-jsnfknf",
+          "subject_area": "positions",
+          "snapshottypecd": "EOD",
+          "messages": 220,
+          "records": 10602
+        },
+        {
+          "originalMessageId": "d4khjhd-ja5kjhsf-ksngkj8-jsnfknf",
+          "subject_area": "taxlots",
+          "snapshottypecd": "AOD",
+          "messages": 55,
+          "records": 100
+        },
+        {
+          "originalMessageId": "d4khjhd-ja5kjhsf-ksngkj8-jsnfknf",
+          "subject_area": "positions",
+          "snapshottypecd": "AOD",
+          "messages": 50,
+          "records": 106
+        }
+      ],
+      "lake": [
+        {
+          "originalMessageId": "d4khjhd-ja5kjhsf-ksjfkj8-jsnfknf",
+          "subject_area": "taxlots",
+          "messages": 223,
+          "records": 10002,
+          "started": "2025-02-11 21:00:00",
+          "completed": "2025-02-11 23:00:00"
+        },
+        {
+          "originalMessageId": "d4khjhd-ja5kjhsf-ksjfkj8-jsnfknf",
+          "subject_area": "positions",
+          "messages": 220,
+          "records": 10602,
+          "started": "2025-02-11 21:00:00",
+          "completed": "2025-02-12 00:00:00"
+        }
+      ]
+    };
+
+    // Function to calculate duration from started/completed timestamps
+    function calculateDuration(started, completed) {
+      try {
+        const startDate = new Date(started);
+        const endDate = new Date(completed);
+        const diff = endDate - startDate; // milliseconds
+        const hours = Math.floor(diff / 3600000);
+        const minutes = Math.floor((diff % 3600000) / 60000);
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      } catch {
+        return "N/A";
+      }
+    }
+
+    function compareData(admData, lakeData) {
+      const tableBody = document.querySelector('#comparisonTableBody');
+      tableBody.innerHTML = ''; // Clear existing rows
+
+      // Map ADM data with match status
+      const mappedData = admData.map(admItem => {
+        const lakeItem = lakeData.find(item => 
+          item.originalMessageId === admItem.originalMessageId && 
+          item.subject_area === admItem.subject_area
+        );
+        const isMatched = lakeItem && 
+          admItem.messages === lakeItem.messages && 
+          admItem.records === lakeItem.records;
+        return { ...admItem, isMatched, lakeItem };
+      });
+
+      // Sort data: Mismatched first, then Matched
+      const sortedData = mappedData.sort((a, b) => {
+        if (a.isMatched === b.isMatched) return 0; // Keep order if both are matched or mismatched
+        return a.isMatched ? 1 : -1; // Mismatched (false) comes before Matched (true)
+      });
+
+      // Populate rows
+      sortedData.forEach(admItem => {
+        const row = document.createElement('tr');
+        const status = admItem.isMatched ? "Matched" : "Mismatched";
+        
+        row.innerHTML = `
+          <td>${admItem.snapshottypecd}</td>
+          <td>${admItem.subject_area}</td>
+          <td>${admItem.originalMessageId}</td>
+          <td>${admItem.messages}</td>
+          <td>${admItem.lakeItem ? admItem.lakeItem.messages : 'N/A'}</td>
+          <td>${admItem.records}</td>
+          <td>${admItem.lakeItem ? admItem.lakeItem.records : 'N/A'}</td>
+          <td>${admItem.lakeItem ? admItem.lakeItem.started : 'N/A'}</td>
+          <td>${admItem.lakeItem ? admItem.lakeItem.completed : 'N/A'}</td>
+          <td>${admItem.lakeItem ? calculateDuration(admItem.lakeItem.started, admItem.lakeItem.completed) : 'N/A'}</td>
+          <td class="${status === 'Matched' ? 'status-matched' : 'status-mismatch'}">${status}</td>
+        `;
+
+        tableBody.appendChild(row);
+      });
+    }
+
+    function filterTable() {
+      const snapshotFilter = document.getElementById('snapshotFilter').value.toUpperCase();
+      const subjectFilter = document.getElementById('subjectFilter').value.toUpperCase();
+      const messageIdFilter = document.getElementById('messageIdFilter').value.toUpperCase();
+      const admMessagesFilter = document.getElementById('admMessagesFilter').value.toUpperCase();
+      const lakeMessagesFilter = document.getElementById('lakeMessagesFilter').value.toUpperCase();
+      const admRecordsFilter = document.getElementById('admRecordsFilter').value.toUpperCase();
+      const lakeRecordsFilter = document.getElementById('lakeRecordsFilter').value.toUpperCase();
+      const startedFilter = document.getElementById('startedFilter').value.toUpperCase();
+      const completedFilter = document.getElementById('completedFilter').value.toUpperCase();
+      const durationFilter = document.getElementById('durationFilter').value.toUpperCase();
+      const statusFilter = document.getElementById('statusFilter').value.toUpperCase();
+
+      const rows = document.querySelectorAll('#comparisonTable tbody tr');
+
+      rows.forEach(row => {
+        const snapshot = row.cells[0].textContent.toUpperCase();
+        const subject = row.cells[1].textContent.toUpperCase();
+        const messageId = row.cells[2].textContent.toUpperCase();
+        const admMessages = row.cells[3].textContent.toUpperCase();
+        const lakeMessages = row.cells[4].textContent.toUpperCase();
+        const admRecords = row.cells[5].textContent.toUpperCase();
+        const lakeRecords = row.cells[6].textContent.toUpperCase();
+        const started = row.cells[7].textContent.toUpperCase();
+        const completed = row.cells[8].textContent.toUpperCase();
+        const duration = row.cells[9].textContent.toUpperCase();
+        const status = row.cells[10].textContent.toUpperCase();
+
+        const matches = 
+          (snapshot.includes(snapshotFilter)) &&
+          (subject.includes(subjectFilter)) &&
+          (messageId.includes(messageIdFilter)) &&
+          (admMessages.includes(admMessagesFilter)) &&
+          (lakeMessages.includes(lakeMessagesFilter)) &&
+          (admRecords.includes(admRecordsFilter)) &&
+          (lakeRecords.includes(lakeRecordsFilter)) &&
+          (started.includes(startedFilter)) &&
+          (completed.includes(completedFilter)) &&
+          (duration.includes(durationFilter)) &&
+          (status.includes(statusFilter));
+
+        row.style.display = matches ? '' : 'none';
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // Use hardcoded data for testing on page load
+      compareData(testData.adm, testData.lake);
+
+      // Add event listeners for filtering
+      document.querySelectorAll('#comparisonTable thead input').forEach(input => {
+        input.addEventListener('input', filterTable);
+      });
+    });
+  </script>
+</head>
+
+<body>
+  <div class="container">
+    <!-- Form Section -->
+    <div class="form-container">
+      <form id="apiForm" onsubmit="submitForm(event)" style="display: flex; gap: 10px;">
+        <select id="client" name="client" required>
+          <option value="">Client</option>
+          <option value="Client A">CIF</option>
+          <option value="Client B">IAG</option>
+          <option value="Client C">LTR</option>
+		  <option value="Client C">VYA</option>
+        </select>
+
+        <select id="region" name="region" required>
+          <option value="">Region</option>
+          <option value="North">AMER</option>
+          <option value="South">North America</option>
+          <option value="East">EMEA</option>
+          <option value="West">Global</option>
+        </select>
+
+        <input type="date" id="businessdate" name="businessdate" required>
+        <button type="submit">Submit</button>
+      </form>
+      <span id="currentTime" class="current-time"></span>
+    </div>
+
+    <!-- Filter Row -->
+    <table class="table table-bordered table-hover" id="comparisonTable">
+      <thead class="table-primary">
+        <tr>
+          <th><input type="text" id="snapshotFilter" placeholder="snap"></th>
+          <th><input type="text" id="subjectFilter" placeholder="Subject"></th>
+          <th><input type="text" id="messageIdFilter" placeholder="OriginalMessageID"></th>
+          <th><input type="text" id="admMessagesFilter" placeholder="ADU Mgs"></th>
+          <th><input type="text" id="lakeMessagesFilter" placeholder="DHL Mgs"></th>
+          <th><input type="text" id="admRecordsFilter" placeholder="ADU Records"></th>
+          <th><input type="text" id="lakeRecordsFilter" placeholder="DHL Records"></th>
+          <th><input type="text" id="startedFilter" placeholder="Started"></th>
+          <th><input type="text" id="completedFilter" placeholder="Completed"></th>
+          <th><input type="text" id="durationFilter" placeholder="Duration"></th>
+          <th><input type="text" id="statusFilter" placeholder="Status"></th>
+        </tr>
+      </thead>
+      <tbody id="comparisonTableBody">
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
