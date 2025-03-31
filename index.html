@@ -1,127 +1,122 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Data Lake Validation</title>
-    <style>
-        body {
-            font-family: 'Arial', sans-serif;
-            background-color: #f0f8ff;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-        }
-        .form-container {
-            background-color: #fff;
-            padding: 20px 40px;
-            border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            max-width: 400px;
-            width: 100%;
-        }
-        h1 {
-            text-align: center;
-            color: #4a90e2;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
-            color: #333;
-        }
-        input[type="text"], input[type="date"], select {
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 20px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            box-sizing: border-box;
-            font-size: 16px;
-        }
-        button {
-            background-color: #4a90e2;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-            width: 100%;
-        }
-        button:hover {
-            background-color: #357ABD;
-        }
-        .form-container p {
-            text-align: center;
-            font-size: 14px;
-            color: #777;
-        }
-    </style>
-    <script>
-        async function submitForm(event) {
-            event.preventDefault();
-            
-            // Gather input values
-            const client = document.getElementById("client").value;
-            const region = document.getElementById("region").value;
-            const businessDate = document.getElementById("businessdate").value;
-
-            // Dynamically form the URL
-            const url = `https://localhost:8080/${client}/${region}/${businessDate}`;
-            console.log("Formed URL: ", url);
-
-            try {
-                // Send a POST request to the dynamically formed URL
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ client, region, businessdate: businessDate })
-                });
-
-                // Handle response
-                if (response.ok) {
-                    const result = await response.json();
-                    alert("Success: " + JSON.stringify(result));
-                } else {
-                    alert("Error: " + response.statusText);
-                }
-            } catch (error) {
-                alert("Request failed: " + error.message);
-            }
-        }
-    </script>
-</head>
-<body>
-    <div class="form-container">
-        <h1>Data Lake Validation</h1>
-        <form id="apiForm" onsubmit="submitForm(event)">
-            <label for="client">Client:</label>
-            <select id="client" name="client" required>
-                <option value="">Select Client</option>
-                <option value="Client A">CIF</option>
-                <option value="Client B">IAG</option>
-                <option value="Client C">LTR</option>
-            </select>
-
-            <label for="region">Region:</label>
-            <select id="region" name="region" required>
-                <option value="">Select Region</option>
-                <option value="North">AMER</option>
-                <option value="South">North America</option>
-                <option value="East">EMEA</option>
-                <option value="West">Global</option>
-            </select>
-
-            <label for="businessdate">Business Date:</label>
-            <input type="date" id="businessdate" name="businessdate" required>
-
-            <button type="submit">Submit</button>
-        </form>
+<!-- ====== NEW HEADER SECTION ====== -->
+<header class="header">
+  <div class="header-content">
+    <div class="logo-container">
+      <div class="logo-placeholder">
+        <i class="fas fa-database"></i> <!-- NEW: Logo icon -->
+      </div>
+      <div>
+        <h1 class="header-title">ADU - Datalake Validation</h1> <!-- NEW: Main title -->
+        <p class="header-subtitle">Data consistency verification tool</p> <!-- NEW: Subtitle -->
+      </div>
     </div>
-</body>
-</html>
+    <div id="currentTime" class="current-time" style="color: white;"></div> <!-- UPDATED: Time display -->
+  </div>
+</header>
+
+<!-- ====== NEW TOAST NOTIFICATION ====== -->
+<div id="toast" class="toast"> <!-- NEW: Toast container -->
+  <i id="toastIcon"></i> <!-- NEW: Toast icon -->
+  <span id="toastMessage"></span> <!-- NEW: Toast message -->
+</div>
+
+<!-- ====== UPDATED SCRIPT SECTION ====== -->
+<script>
+  // NEW: Toast notification function
+  function showToast(message, isSuccess) {
+    const toast = document.getElementById('toast');
+    const toastIcon = document.getElementById('toastIcon');
+    const toastMessage = document.getElementById('toastMessage');
+    
+    toast.className = isSuccess ? 'toast success' : 'toast error';
+    toastIcon.className = isSuccess ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+    toastMessage.textContent = message;
+    
+    toast.classList.add('show');
+    
+    setTimeout(() => {
+      toast.classList.remove('show');
+    }, 3000);
+  }
+
+  // UPDATED: Submit form function now uses toast
+  async function submitForm(event) {
+    event.preventDefault();
+    const startTime = performance.now();
+    
+    try {
+      // ... existing fetch code ...
+      
+      const endTime = performance.now();
+      const timeTaken = (endTime - startTime).toFixed(2);
+      
+      if (response.ok) {
+        // ... existing success handling ...
+        showToast(`Request completed in ${timeTaken} ms`, true); // NEW: Success toast
+      } else {
+        // ... existing error handling ...
+        showToast(`Error: ${response.statusText} (${timeTaken} ms)`, false); // NEW: Error toast
+      }
+    } catch (error) {
+      const endTime = performance.now();
+      const timeTaken = (endTime - startTime).toFixed(2);
+      showToast(`Request failed: ${error.message} (${timeTaken} ms)`, false); // NEW: Error toast
+    }
+  }
+
+  // NEW: Current time updater
+  function updateCurrentTime() {
+    const now = new Date();
+    document.getElementById('currentTime').textContent = now.toLocaleString();
+  }
+  
+  // UPDATED: DOMContentLoaded now includes time updater
+  document.addEventListener('DOMContentLoaded', () => {
+    // ... existing initialization ...
+    updateCurrentTime(); // NEW: Initialize time
+    setInterval(updateCurrentTime, 1000); // NEW: Update time every second
+  });
+</script>
+
+<!-- ====== NEW CSS STYLES ====== -->
+<style>
+  /* NEW: Header styles */
+  .header {
+    background: linear-gradient(135deg, #007bff, #0056b3);
+    color: white;
+    padding: 20px 0;
+    margin-bottom: 30px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* NEW: Logo styles */
+  .logo-placeholder {
+    width: 50px;
+    height: 50px;
+    background-color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 15px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  }
+  
+  /* NEW: Toast styles */
+  .toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    min-width: 250px;
+    background-color: #333;
+    color: #fff;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    transform: translateX(150%);
+    transition: transform 0.3s ease;
+  }
+</style>
