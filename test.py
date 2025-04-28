@@ -1,88 +1,354 @@
-import openpyxl
-from collections import defaultdict
+require 'pg'
+require 'mail'
+require 'time'
 
-# Mapping known color codes for red, green, and purple
-color_mapping = {
-    "FFFF0000": "Red",    # Hex color code for red
-    "FF00FF00": "Green",  # Hex color code for green
-    "FF800080": "Purple"   # Hex color code for purple
+# Database configuration
+DB_CONFIG = {
+  host: 'your_db_host',
+  dbname: 'your_db_name',
+  user: 'your_db_user',
+  password: 'your_db_password'
 }
 
-def get_color_and_row_data(file_path):
-    # Load the Excel workbook
-    wb = openpyxl.load_workbook(file_path)
-    sheet = wb.active
+# Email configuration
+Mail.defaults do
+  delivery_method :smtp, {
+    address: 'your_smtp_server',
+    port: 587,
+    domain: 'yourdomain.com',
+    user_name: 'your_email@yourdomain.com',
+    password: 'your_email_password',
+    authentication: 'plain',
+    enable_starttls_auto: true
+  }
+end
 
-    # Store the results as a dictionary where key is column name and color, and value is a set of affected row IDs and values
-    color_rows = defaultdict(lambda: defaultdict(list))  # Use list to store both row IDs and values
+# Marker configurations
+MARKER_PAIRS = [
+  {
+    first_marker: 'opsregioneodmarker',
+    second_marker: 'daterolled',
+    threshold_minutes: 30,
+    pair_name: 'EOD Marker vs Date Rolled'
+  },
+  {
+    first_marker: 'opsregiontradingsignoff',
+    second_marker: 'globalprocessdone',
+    threshold_minutes: 45,
+    pair_name: 'Trading Signoff vs Global Process Done'
+  },
+  {
+    first_marker: 'opsregionEODpricingsignoff',
+    second_marker: 'eodvaluation',
+    threshold_minutes: 30,
+    pair_name: 'EOD Pricing Signoff vs Valuation'
+  }
+]
 
-    # Get the column headers from the first row
-    headers = [cell.value for cell in sheet[1]]  # Assume headers are in the first row
+# Recipient configuration
+ALERT_RECIPIENTS = [
+  'operations-team@yourdomain.com',
+  'it-support@yourdomain.com',
+  'trading-ops@yourdomain.com'
+]
 
-    # Iterate through each cell starting from the second row (data rows)
-    for row in sheet.iter_rows(min_row=2):
-        mellon_id = row[0].value  # Assume the first column is "mellonid"
-        for col_index, cell in enumerate(row[1:], start=1):  # Skip "mellonid" (first column)
-            fill = cell.fill
-            value = cell.value
-            if fill and fill.fgColor and fill.fgColor.rgb:
-                color_code = fill.fgColor.rgb
-                color_name = color_mapping.get(color_code, None)
-                
-                if color_name:
-                    column_name = headers[col_index]  # Get the corresponding header name
-                    # Add the row ID and value (non-null value) to the color-specific list
-                    color_rows[color_name][column_name].append((mellon_id, value))
+def check_all_marker_pairs
+  conn = PG.connect(DB_CONFIG)
+  
+  MARKER_PAIRS.each do |pair|
+    check_marker_pair(conn, pair)
+  end
+  
+  conn.close
+rescue PG::Error => e
+  puts "Database error: #{e.message}"
+ensure
+  conn.close if conn
+end
 
-    return color_rows
+def check_marker_pair(conn, pair)
+  query = <<~SQL
+    WITH first_markers AS (
+        SELECT 
+            client_id, 
+            region, 
+            created_at AS first_marker_time
+        FROM marker_status
+        WHERE marker_name = $1
+        AND status = 'published'
+        AND created_at >= NOW() - INTERVAL '24 hours'
+    ),
+    second_markers AS (
+        SELECT 
+            client_id, 
+            region, 
+            created_at AS second_marker_time
+        FROM marker_status
+        WHERE marker_name = $2
+        AND status = 'published'
+        AND created_at >= NOW() - INTERVAL '24 hours'
+    ),
+    paired_markers AS (
+        SELECT 
+            f.client_id,
+            f.region,
+            f.first_marker_time,
+            s.second_marker_time,
+            EXTRACT(EPOCH FROM (s.second_marker_time - f.first_marker_time))/60 AS duration_minutes
+        FROM first_markers f
+        LEFT JOIN second_markers s ON f.client_id = s.client_id 
+                                  AND f.region = s.region
+                                  AND s.second_marker_time > f.first_marker_time
+    )
+    SELECT 
+        client_id,
+        region,
+        first_marker_time,
+        second_marker_time,
+        duration_minutes,
+        CASE 
+            WHEN second_marker_time IS NULL AND first_marker_time < NOW() - INTERVAL '#{pair[:threshold_minutes]} minutes' THEN 'missing'
+            WHEN duration_minutes > #{pair[:threshold_minutes]} THEN 'delayed'
+            WHEN second_marker_time IS NOT NULL THEN 'completed'
+            ELSE 'first_only'
+        END AS status
+    FROM paired_markers
+    ORDER BY client_id, region;
+  SQL
 
-def generate_custom_messages(color_rows):
-    messages = []
+  results = conn.exec_params(query, [pair[:first_marker], pair[:second_marker]])
 
-    # Iterate over each color and column, generating the custom messages
-    for color, columns in color_rows.items():
-        for column, mellon_data in columns.items():
-            # Extract mellon_ids and corresponding values
-            mellon_ids = [str(data[0]) for data in mellon_data]  # Convert mellon_id to string
-            values = [data[1] for data in mellon_data]  # Store all values including nulls
-            value_count = defaultdict(int)
-            null_mellon_ids = set()
+  # Send notifications for new publications
+  send_new_marker_notifications(pair[:first_marker], pair[:second_marker])
 
-            for mellon_id, value in mellon_data:
-                if value is None:
-                    null_mellon_ids.add(str(mellon_id))  # Convert to string
-                value_count[value] += 1
+  # Process results and send alerts
+  process_marker_results(results, pair)
+end
 
-            # Count total nulls
-            null_count = len(null_mellon_ids)
+def send_new_marker_notifications(first_marker, second_marker)
+  # Get new first markers (published in last 15 minutes)
+  new_first_markers = get_new_markers(first_marker, '15 minutes')
+  
+  new_first_markers.each do |marker|
+    subject = "ℹ️ Marker Published: #{first_marker} for #{marker['client_id']}/#{marker['region']}"
+    body = <<~BODY
+      The #{first_marker} marker has been published.
 
-            # Prepare output for null values
-            if null_count > 0:
-                unique_null_mellon_ids = sorted(null_mellon_ids)
-                mellon_ids_list = ','.join(unique_null_mellon_ids)
-                messages.append(f"{null_count} {column} Null for mellon id {mellon_ids_list} (because {color.lower()} color)")
+      Details:
+      Client: #{marker['client_id']}
+      Region: #{marker['region']}
+      Published At: #{marker['created_at']}
 
-            # Prepare output for non-null values
-            for value, count in value_count.items():
-                if value is not None:  # Skip the null value case since it's already handled
-                    unique_mellon_ids = sorted({mellon_ids[i] for i in range(len(values)) if values[i] == value})
-                    mellon_ids_list = ','.join(unique_mellon_ids)
-                    messages.append(f"{count} {column} {value} for mellon id {mellon_ids_list} (because {color.lower()} color)")
+      Next expected marker: #{second_marker}
+    BODY
 
-    return messages
+    send_notification_email(subject, body)
+  end
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) != 2:
-        print("Usage: python count_cell_colors.py <file.xlsx>")
-        sys.exit(1)
-    
-    file_path = sys.argv[1]
-    color_rows = get_color_and_row_data(file_path)
+  # Get new second markers
+  new_second_markers = get_new_markers(second_marker, '15 minutes')
+  
+  new_second_markers.each do |marker|
+    subject = "✅ Marker Published: #{second_marker} for #{marker['client_id']}/#{marker['region']}"
+    body = <<~BODY
+      The #{second_marker} marker has been published successfully.
 
-    # Generate custom error messages
-    messages = generate_custom_messages(color_rows)
+      Details:
+      Client: #{marker['client_id']}
+      Region: #{marker['region']}
+      Published At: #{marker['created_at']}
+    BODY
 
-    # Print the messages
-    for message in messages:
-        print(message)
+    send_notification_email(subject, body)
+  end
+end
+
+def get_new_markers(marker_name, time_interval)
+  conn = PG.connect(DB_CONFIG)
+  
+  query = <<~SQL
+    SELECT client_id, region, created_at
+    FROM marker_status
+    WHERE marker_name = $1
+    AND status = 'published'
+    AND created_at >= NOW() - INTERVAL $2
+    ORDER BY created_at DESC
+  SQL
+  
+  results = conn.exec_params(query, [marker_name, time_interval])
+  conn.close
+  results
+rescue PG::Error => e
+  puts "Database error when fetching new markers: #{e.message}"
+  []
+ensure
+  conn.close if conn
+end
+
+def process_marker_results(results, pair)
+  results.each do |row|
+    next unless ['missing', 'delayed'].include?(row['status'])
+
+    client_id = row['client_id']
+    region = row['region']
+    first_time = row['first_marker_time']
+    second_time = row['second_marker_time']
+    duration = row['duration_minutes']
+
+    if row['status'] == 'missing'
+      subject = "🚨 ALERT: #{pair[:second_marker].upcase} MISSING for #{client_id}/#{region}"
+      current_delay = ((Time.now - Time.parse(first_time))/60).round(1)
+      body = <<~BODY
+        #{pair[:pair_name]} Process Delay Alert
+
+        The #{pair[:first_marker]} marker was published at #{first_time},
+        but #{pair[:second_marker]} has NOT been published yet.
+        (Threshold: #{pair[:threshold_minutes]} minutes, Current Delay: #{current_delay} minutes)
+
+        Details:
+        Client: #{client_id}
+        Region: #{region}
+        #{pair[:first_marker]} Time: #{first_time}
+
+        Please investigate immediately.
+      BODY
+    else # delayed
+      subject = "⚠️ WARNING: #{pair[:second_marker].upcase} DELAYED for #{client_id}/#{region}"
+      body = <<~BODY
+        #{pair[:pair_name]} Process Delay Alert
+
+        The #{pair[:second_marker]} marker was published #{duration} minutes after #{pair[:first_marker]}
+        (Threshold: #{pair[:threshold_minutes]} minutes).
+
+        Details:
+        Client: #{client_id}
+        Region: #{region}
+        #{pair[:first_marker]} Time: #{first_time}
+        #{pair[:second_marker]} Time: #{second_time}
+        Duration: #{duration} minutes
+
+        Please review the process for potential issues.
+      BODY
+    end
+
+    send_alert_email(subject, body)
+  end
+end
+
+def send_alert_email(subject, body)
+  Mail.deliver do
+    from    'process-alerts@yourdomain.com'
+    to      ALERT_RECIPIENTS
+    subject subject
+    body    body
+  end
+  puts "Sent alert: #{subject}"
+rescue => e
+  puts "Failed to send alert email: #{e.message}"
+end
+
+def send_notification_email(subject, body)
+  Mail.deliver do
+    from    'process-notifications@yourdomain.com'
+    to      ALERT_RECIPIENTS
+    subject subject
+    body    body
+  end
+  puts "Sent notification: #{subject}"
+rescue => e
+  puts "Failed to send notification email: #{e.message}"
+end
+
+# Run the check
+check_all_marker_pairs
+
+=========
+
+-- opsregioneodmarker vs daterolled
+SELECT 
+    'opsregioneodmarker vs daterolled' AS comparison,
+    client_id,
+    region,
+    first_marker_time,
+    second_marker_time,
+    duration_minutes,
+    status
+FROM (
+    WITH first_markers AS (SELECT client_id, region, created_at AS first_marker_time FROM marker_status WHERE marker_name = 'opsregioneodmarker' AND status = 'published' AND created_at >= NOW() - INTERVAL '24 hours'),
+    second_markers AS (SELECT client_id, region, created_at AS second_marker_time FROM marker_status WHERE marker_name = 'daterolled' AND status = 'published' AND created_at >= NOW() - INTERVAL '24 hours'),
+    paired_markers AS (
+        SELECT f.client_id, f.region, f.first_marker_time, s.second_marker_time,
+        EXTRACT(EPOCH FROM (s.second_marker_time - f.first_marker_time))/60 AS duration_minutes
+        FROM first_markers f LEFT JOIN second_markers s ON f.client_id = s.client_id AND f.region = s.region AND s.second_marker_time > f.first_marker_time
+    )
+    SELECT client_id, region, first_marker_time, second_marker_time, duration_minutes,
+    CASE 
+        WHEN second_marker_time IS NULL AND first_marker_time < NOW() - INTERVAL '30 minutes' THEN 'missing'
+        WHEN duration_minutes > 30 THEN 'delayed'
+        WHEN second_marker_time IS NOT NULL THEN 'completed'
+        ELSE 'first_only'
+    END AS status
+    FROM paired_markers
+) AS eod_vs_daterolled
+WHERE status != 'first_only'
+
+UNION ALL
+
+-- opsregiontradingsignoff vs globalprocessdone
+SELECT 
+    'opsregiontradingsignoff vs globalprocessdone' AS comparison,
+    client_id,
+    region,
+    first_marker_time,
+    second_marker_time,
+    duration_minutes,
+    status
+FROM (
+    WITH first_markers AS (SELECT client_id, region, created_at AS first_marker_time FROM marker_status WHERE marker_name = 'opsregiontradingsignoff' AND status = 'published' AND created_at >= NOW() - INTERVAL '24 hours'),
+    second_markers AS (SELECT client_id, region, created_at AS second_marker_time FROM marker_status WHERE marker_name = 'globalprocessdone' AND status = 'published' AND created_at >= NOW() - INTERVAL '24 hours'),
+    paired_markers AS (
+        SELECT f.client_id, f.region, f.first_marker_time, s.second_marker_time,
+        EXTRACT(EPOCH FROM (s.second_marker_time - f.first_marker_time))/60 AS duration_minutes
+        FROM first_markers f LEFT JOIN second_markers s ON f.client_id = s.client_id AND f.region = s.region AND s.second_marker_time > f.first_marker_time
+    )
+    SELECT client_id, region, first_marker_time, second_marker_time, duration_minutes,
+    CASE 
+        WHEN second_marker_time IS NULL AND first_marker_time < NOW() - INTERVAL '45 minutes' THEN 'missing'
+        WHEN duration_minutes > 45 THEN 'delayed'
+        WHEN second_marker_time IS NOT NULL THEN 'completed'
+        ELSE 'first_only'
+    END AS status
+    FROM paired_markers
+) AS trading_vs_global
+WHERE status != 'first_only'
+
+UNION ALL
+
+-- opsregionEODpricingsignoff vs eodvaluation
+SELECT 
+    'opsregionEODpricingsignoff vs eodvaluation' AS comparison,
+    client_id,
+    region,
+    first_marker_time,
+    second_marker_time,
+    duration_minutes,
+    status
+FROM (
+    WITH first_markers AS (SELECT client_id, region, created_at AS first_marker_time FROM marker_status WHERE marker_name = 'opsregionEODpricingsignoff' AND status = 'published' AND created_at >= NOW() - INTERVAL '24 hours'),
+    second_markers AS (SELECT client_id, region, created_at AS second_marker_time FROM marker_status WHERE marker_name = 'eodvaluation' AND status = 'published' AND created_at >= NOW() - INTERVAL '24 hours'),
+    paired_markers AS (
+        SELECT f.client_id, f.region, f.first_marker_time, s.second_marker_time,
+        EXTRACT(EPOCH FROM (s.second_marker_time - f.first_marker_time))/60 AS duration_minutes
+        FROM first_markers f LEFT JOIN second_markers s ON f.client_id = s.client_id AND f.region = s.region AND s.second_marker_time > f.first_marker_time
+    )
+    SELECT client_id, region, first_marker_time, second_marker_time, duration_minutes,
+    CASE 
+        WHEN second_marker_time IS NULL AND first_marker_time < NOW() - INTERVAL '30 minutes' THEN 'missing'
+        WHEN duration_minutes > 30 THEN 'delayed'
+        WHEN second_marker_time IS NOT NULL THEN 'completed'
+        ELSE 'first_only'
+    END AS status
+    FROM paired_markers
+) AS pricing_vs_valuation
+WHERE status != 'first_only'
+ORDER BY comparison, client_id, region;
