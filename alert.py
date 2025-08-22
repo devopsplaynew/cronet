@@ -12,11 +12,12 @@ DB2_CONFIG = {"host":"localhost","port":"5432","dbname":"adm","user":"admin","pa
 # ===== Email Config =====
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_USER = "praveenangel53@gmail.com"
-EMAIL_PASS = "rxbn mpuu auht ldxi"
-EMAIL_TO = ["praveenangel53@gmail.com"]
+EMAIL_USER = "XXXX@gmail.com"
+EMAIL_PASS = "XXXldxi"
+EMAIL_TO = ["XXXX@gmail.com"]
 
 # ===== Timezone =====
+UTC = pytz.timezone("UTC")
 EST = pytz.timezone("US/Eastern")
 LOG_FILE = "aodgl_alerts.log"
 
@@ -49,7 +50,7 @@ def get_business_date(now):
 def within_schedule(now):
     if now.weekday() in (5,6):
         return False
-    start = now.replace(hour=11, minute=45, second=0, microsecond=0)
+    start = now.replace(hour=21, minute=45, second=0, microsecond=0)
     end = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
     if now.hour < 3:
         start -= timedelta(days=1)
@@ -82,8 +83,8 @@ def check_db2_files(business_date):
     return alert_triggered
 
 def check_alerts():
-    now = datetime.now(EST)
-    bd = get_business_date(now)
+    now_est = datetime.now(EST)
+    bd = get_business_date(now_est)
     if not bd:
         write_log("Weekend - skipping alerts")
         return
@@ -100,11 +101,26 @@ def check_alerts():
     """, (bd,))
     markers = cur.fetchall()
     marker3 = marker4 = None
+    
     for m_id, t in markers:
+        # Convert UTC timestamp from DB to EST
+        if isinstance(t, datetime):
+            # If it's a timezone-aware datetime, convert to EST
+            if t.tzinfo is not None:
+                t_est = t.astimezone(EST)
+            else:
+                # If it's naive, assume UTC and convert to EST
+                t_utc = UTC.localize(t)
+                t_est = t_utc.astimezone(EST)
+        else:
+            # If it's a string, parse it and convert to EST
+            t_utc = UTC.localize(datetime.strptime(str(t), '%Y-%m-%d %H:%M:%S'))
+            t_est = t_utc.astimezone(EST)
+            
         if m_id == '3' and not marker3:
-            marker3 = t.astimezone(EST)
+            marker3 = t_est
         if m_id == '4' and not marker4:
-            marker4 = t.astimezone(EST)
+            marker4 = t_est
 
     # Status flags for summary
     marker4_status = marker3_status = db2_status = "Skipped"
@@ -117,13 +133,13 @@ def check_alerts():
         marker3_status = db2_status = "Waiting"
     else:
         marker4_status = "OK"
-        write_log(f"Marker4 found at {marker4}")
+        write_log(f"Marker4 found at {marker4.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         
         # --- Marker3 alert ---
         if not marker3:
-            time_since_marker4 = now - marker4
+            time_since_marker4 = now_est - marker4
             if time_since_marker4 >= timedelta(minutes=30):
-                send_email("AODGL DELAY ALERT", f"Marker3 missing >30 min after Marker4 {marker4}, bd={bd}")
+                send_email("AODGL DELAY ALERT", f"Marker3 missing >30 min after Marker4 {marker4.strftime('%Y-%m-%d %H:%M:%S %Z')}, bd={bd}")
                 marker3_status = "Alert sent"
                 write_log(f"Marker3 missing >30min, bd={bd}")
             else:
@@ -132,16 +148,16 @@ def check_alerts():
             db2_status = "Waiting"
         else:
             marker3_status = "OK"
-            write_log(f"Marker3 found at {marker3}")
+            write_log(f"Marker3 found at {marker3.strftime('%Y-%m-%d %H:%M:%S %Z')}")
             
             # --- DB2 alert ---
-            time_since_marker3 = now - marker3
+            time_since_marker3 = now_est - marker3
             if time_since_marker3 >= timedelta(minutes=15):
                 db2_triggered = check_db2_files(bd)
                 db2_status = "Alert sent" if db2_triggered else "OK"
             else:
                 db2_status = f"Waiting 15min ({int(time_since_marker3.total_seconds()/60)}min passed)"
-                write_log(f"DB2 waiting 15min window from marker3 at {marker3}")
+                write_log(f"DB2 waiting 15min window from marker3 at {marker3.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
     # --- Log summary ---
     write_log(f"Iteration summary - Marker4: {marker4_status}, Marker3: {marker3_status}, DB2: {db2_status}")
