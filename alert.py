@@ -1,188 +1,178 @@
-import pandas as pd
 import psycopg2
-from datetime import datetime, timedelta
-import pytz
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import sys
+from datetime import datetime, timedelta
+import time
+import pytz
 
-# Timezone setup
-EST = pytz.timezone('US/Eastern')
+# ===== DB Configs =====
+DB1_CONFIG = {"host":"localhost","port":"5432","dbname":"atls","user":"admin","password":"admin"}
+DB2_CONFIG = {"host":"localhost","port":"5432","dbname":"adm","user":"admin","password":"admin"}
 
-# Database configurations
-DB_CONFIG_1 = {
-    'host': 'your_db1_host',
-    'database': 'your_db1_name',
-    'user': 'your_username',
-    'password': 'your_password',
-    'port': '5432'
-}
+# ===== Email Config =====
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+EMAIL_USER = "praveenangel53@gmail.com"
+EMAIL_PASS = "rxbn mpuu auht ldxi"
+EMAIL_TO = ["praveenangel53@gmail.com"]
 
-DB_CONFIG_2 = {
-    'host': 'your_db2_host',
-    'database': 'your_db2_name',
-    'user': 'your_username',
-    'password': 'your_password',
-    'port': '5432'
-}
+# ===== Timezone =====
+EST = pytz.timezone("US/Eastern")
+LOG_FILE = "aodgl_alerts.log"
 
-EMAIL_CONFIG = {
-    'smtp_server': 'your.smtp.server',
-    'smtp_port': 587,
-    'sender_email': 'alerts@yourdomain.com',
-    'sender_password': 'yourpassword',
-    'recipient_emails': ['recipient@domain.com']
-}
+def write_log(msg):
+    ts = datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a") as f:
+        f.write(f"[{ts}] {msg}\n")
+    print(f"[LOG] {msg}")
 
-def get_current_est():
-    return datetime.now(EST)
-
-def get_db_connection(db_config):
+def send_email(subject, body):
+    write_log(f"EMAIL SENT: {subject} - {body}")
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = EMAIL_USER
+    msg['To'] = ", ".join(EMAIL_TO)
     try:
-        return psycopg2.connect(**db_config)
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as s:
+            s.starttls()
+            s.login(EMAIL_USER, EMAIL_PASS)
+            s.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
     except Exception as e:
-        print(f"Database connection failed: {str(e)}")
-        sys.exit(1)
+        write_log(f"EMAIL FAILED: {e}")
 
-def fetch_data(db_config, query):
-    try:
-        with get_db_connection(db_config) as conn:
-            df = pd.read_sql_query(query, conn)
-            if not df.empty and 'processing_time' in df.columns:
-                df['processing_time'] = pd.to_datetime(df['processing_time']).dt.tz_localize('UTC').dt.tz_convert(EST)
-            return df
-    except Exception as e:
-        print(f"Error fetching data: {str(e)}")
-        return pd.DataFrame()
+def get_business_date(now):
+    # Fixed business_date between 21:45 → 03:00
+    if now.weekday() in (5,6):
+        return None
+    return (now - timedelta(days=1) if now.hour < 3 else now).strftime("%Y-%m-%d")
 
-def get_required_counts(snapshot_type):
-    """Returns (transformed_count, martload_count) based on snapshot type"""
-    if snapshot_type in ['EOD', 'SOD']:
-        return (6, 5)
-    elif snapshot_type == 'AOD':
-        return (2, 2)
-    elif snapshot_type == 'EODGL':
-        return (1, 1)
-    return (None, None)
+def within_schedule(now):
+    if now.weekday() in (5,6):
+        return False
+    start = now.replace(hour=11, minute=45, second=0, microsecond=0)
+    end = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
+    if now.hour < 3:
+        start -= timedelta(days=1)
+    return start <= now <= end
 
-def process_data(db1_df, db2_df):
-    alerts = {}
-    current_est = get_current_est()
+def check_db2_files(business_date):
+    conn2 = psycopg2.connect(**DB2_CONFIG)
+    cur2 = conn2.cursor()
+    cur2.execute("""
+        SELECT file_name
+        FROM file_marker
+        WHERE business_date=%s AND party_cd='VYA' AND processing_region_cd='AMER' AND entity_id IS NOT NULL
+          AND file_name NOT IN (
+              SELECT file_name
+              FROM files
+              WHERE business_date=%s AND party_cd='VYA' AND processing_region_cd='AMER' AND file_type='GLAOD'
+          )
+    """, (business_date, business_date))
+    missing = cur2.fetchall()
+    alert_triggered = False
+    if missing:
+        files_list = ', '.join([f[0] for f in missing])
+        send_email("AODGL FILE ALERT", f"Missing files for business_date={business_date}: {files_list}")
+        write_log(f"DB2 alert triggered: {files_list}")
+        alert_triggered = True
+    else:
+        write_log(f"DB2 check OK, no missing files for bd={business_date}")
+    cur2.close()
+    conn2.close()
+    return alert_triggered
+
+def check_alerts():
+    now = datetime.now(EST)
+    bd = get_business_date(now)
+    if not bd:
+        write_log("Weekend - skipping alerts")
+        return
     
-    db1_grouped = db1_df.groupby(['client_cd', 'processing_region_cd', 'snapshot_type_cd',
-                                 'business_dt', 'original_message_id'])
+    write_log(f"Checking alerts for business_date: {bd}")
     
-    for group_key, group_df in db1_grouped:
-        msg_id = group_key[4]
-        snapshot_type = group_key[2]
-        accounting_row = group_df[group_df['marker_type'] == 'accounting_events']
+    conn = psycopg2.connect(**DB1_CONFIG)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT marker_template_id, created_at
+        FROM input_markers
+        WHERE marker_template_id IN ('3','4') AND business_date=%s
+        ORDER BY created_at DESC
+    """, (bd,))
+    markers = cur.fetchall()
+    marker3 = marker4 = None
+    for m_id, t in markers:
+        if m_id == '3' and not marker3:
+            marker3 = t.astimezone(EST)
+        if m_id == '4' and not marker4:
+            marker4 = t.astimezone(EST)
+
+    # Status flags for summary
+    marker4_status = marker3_status = db2_status = "Skipped"
+
+    # --- Marker4 alert ---
+    if not marker4:
+        send_email("AODGL DELAY ALERT", f"Marker4 missing for business_date={bd}")
+        marker4_status = "Alert sent"
+        write_log(f"Marker4 missing for bd={bd}")
+        marker3_status = db2_status = "Waiting"
+    else:
+        marker4_status = "OK"
+        write_log(f"Marker4 found at {marker4}")
         
-        if not accounting_row.empty:
-            accounting_time = pd.to_datetime(accounting_row['processing_time'].iloc[0])
-            duration = (current_est - accounting_time).total_seconds() / 3600  # in hours
-            
-            # Get required counts for this snapshot type
-            req_transformed, req_martload = get_required_counts(snapshot_type)
-            
-            # Check transformed marker in DB1
-            transformed_rows = group_df[group_df['marker_type'].str.contains('Transformed', case=False, na=False)]
-            transformed_ok = True
-            transformed_issues = []
-            
-            if transformed_rows.empty:
-                if duration > 0.5:  # 30 mins
-                    transformed_ok = False
-                    transformed_issues.append('Missing transformed marker')
+        # --- Marker3 alert ---
+        if not marker3:
+            time_since_marker4 = now - marker4
+            if time_since_marker4 >= timedelta(minutes=30):
+                send_email("AODGL DELAY ALERT", f"Marker3 missing >30 min after Marker4 {marker4}, bd={bd}")
+                marker3_status = "Alert sent"
+                write_log(f"Marker3 missing >30min, bd={bd}")
             else:
-                transform_time = pd.to_datetime(transformed_rows['processing_time'].iloc[0])
-                transform_duration = (transform_time - accounting_time).total_seconds() / 60
-                
-                if transform_duration > 30:
-                    transformed_ok = False
-                    transformed_issues.append(f'Transformed late ({transform_duration:.0f} mins)')
-                
-                if req_transformed is not None and transformed_rows['count'].iloc[0] != req_transformed:
-                    transformed_ok = False
-                    transformed_issues.append(f'Transformed count mismatch ({transformed_rows["count"].iloc[0]}/{req_transformed})')
+                marker3_status = f"Waiting 30min ({int(time_since_marker4.total_seconds()/60)}min passed)"
+                write_log(f"Marker3 waiting 30min window, bd={bd}")
+            db2_status = "Waiting"
+        else:
+            marker3_status = "OK"
+            write_log(f"Marker3 found at {marker3}")
             
-            # Check martload in DB2
-            mart_row = db2_df[
-                (db2_df['original_message_id'] == msg_id) &
-                (db2_df['marker_type'] == 'martloadcomplete')
-            ]
-            martload_issues = []
-            
-            if duration > 1:  # Only check martload after 1 hour
-                if mart_row.empty:
-                    martload_issues.append('Missing martload completion')
-                else:
-                    mart_time = pd.to_datetime(mart_row['processing_time'].iloc[0])
-                    mart_duration = (mart_time - accounting_time).total_seconds() / 3600
-                    
-                    if mart_duration > 1:
-                        martload_issues.append(f'Martload late ({mart_duration:.1f}h)')
-                    
-                    if req_martload is not None and mart_row['count'].iloc[0] != req_martload:
-                        martload_issues.append(f'Martload count mismatch ({mart_row["count"].iloc[0]}/{req_martload})')
-            
-            # Combine all issues
-            all_issues = transformed_issues + martload_issues
-            if all_issues:
-                alerts[msg_id] = {
-                    'client': group_key[0],
-                    'region': group_key[1],
-                    'snapshot': snapshot_type,
-                    'business_dt': group_key[3],
-                    'original_message_id': msg_id,
-                    'duration': f"{duration:.1f}h",
-                    'issue': ' | '.join(all_issues),
-                    'alert_time': current_est.strftime('%Y-%m-%d %H:%M:%S %Z'),
-                    'transformed_status': 'OK' if transformed_ok else 'ISSUE',
-                    'martload_status': 'OK' if not martload_issues else 'ISSUE'
-                }
-    
-    return list(alerts.values())
+            # --- DB2 alert ---
+            time_since_marker3 = now - marker3
+            if time_since_marker3 >= timedelta(minutes=15):
+                db2_triggered = check_db2_files(bd)
+                db2_status = "Alert sent" if db2_triggered else "OK"
+            else:
+                db2_status = f"Waiting 15min ({int(time_since_marker3.total_seconds()/60)}min passed)"
+                write_log(f"DB2 waiting 15min window from marker3 at {marker3}")
 
-def create_html_alert(alerts):
-    if not alerts:
-        return "<p>No alerts to display</p>"
-    
-    html = """<html>
-<body>
-<h3>Data Processing Alerts</h3>
-<p>Generated at: {alert_time}</p>
-<table border="1" cellpadding="5" cellspacing="0">
-    <tr>
-        <th>Client</th>
-        <th>Region</th>
-        <th>Type</th>
-        <th>Date</th>
-        <th>Message ID</th>
-        <th>Duration</th>
-        <th>Transformed</th>
-        <th>Martload</th>
-        <th>Issues</th>
-    </tr>""".format(alert_time=get_current_est().strftime('%Y-%m-%d %H:%M:%S %Z'))
+    # --- Log summary ---
+    write_log(f"Iteration summary - Marker4: {marker4_status}, Marker3: {marker3_status}, DB2: {db2_status}")
 
-    for alert in alerts:
-        html += f"""
-    <tr>
-        <td>{alert['client']}</td>
-        <td>{alert['region']}</td>
-        <td>{alert['snapshot']}</td>
-        <td>{alert['business_dt']}</td>
-        <td>{alert['original_message_id']}</td>
-        <td>{alert['duration']}</td>
-        <td>{alert['transformed_status']}</td>
-        <td>{alert['martload_status']}</td>
-        <td>{alert['issue']}</td>
-    </tr>"""
-    
-    html += """</table></body></html>"""
-    return html
+    cur.close()
+    conn.close()
 
-# [Keep send_email() and main() functions from previous version]
+def wait_until_next_15min():
+    now = datetime.now(EST)
+    # Compute next 15-min slot
+    next_slot_minute = ((now.minute // 15) + 1) * 15
+    next_hour = now.hour
+    if next_slot_minute >= 60:
+        next_slot_minute -= 60
+        next_hour = (next_hour + 1) % 24
+    next_run = now.replace(hour=next_hour, minute=next_slot_minute, second=0, microsecond=0)
+    sleep_sec = max((next_run - now).total_seconds(), 0)
+    write_log(f"Sleeping {int(sleep_sec)} seconds until next 15-min iteration at {next_run.strftime('%H:%M')}")
+    time.sleep(sleep_sec)
 
-if __name__ == "__main__":
+def main():
+    write_log("=== Script started ===")
+    while True:
+        now = datetime.now(EST)
+        if within_schedule(now):
+            check_alerts()
+            wait_until_next_15min()
+        else:
+            write_log("Outside schedule, sleeping until next iteration")
+            # Sleep for 15 minutes but check if we're entering the schedule
+            time.sleep(15 * 60)
+
+if __name__=="__main__":
     main()
