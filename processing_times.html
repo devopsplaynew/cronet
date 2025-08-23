@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processing Times - {{ client }} / {{ region }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .compact-card {
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            margin-bottom: 0.8rem;
+            background: white;
+        }
+        .compact-card .card-header {
+            background: #495057;
+            color: white;
+            padding: 0.5rem 0.8rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border: none;
+        }
+        .compact-card .card-body {
+            padding: 0.6rem;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 0.5rem;
+            margin-bottom: 0.8rem;
+        }
+        .stat-item {
+            text-align: center;
+            padding: 0.4rem;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+        .stat-number {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #495057;
+            line-height: 1.2;
+        }
+        .stat-label {
+            font-size: 0.7rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .time-badge {
+            font-size: 0.7rem;
+            padding: 0.2em 0.5em;
+            border-radius: 4px;
+        }
+        .table-micro {
+            font-size: 0.75rem;
+            margin-bottom: 0;
+        }
+        .table-micro th {
+            padding: 0.3rem 0.4rem;
+            background: #e9ecef;
+            font-weight: 600;
+        }
+        .table-micro td {
+            padding: 0.2rem 0.4rem;
+            vertical-align: middle;
+        }
+        .table-micro tr:hover {
+            background-color: #f8f9fa;
+        }
+        .section-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #495057;
+            margin: 0.8rem 0 0.4rem 0;
+            padding-bottom: 0.2rem;
+            border-bottom: 2px solid #6c5ce7;
+        }
+        .time-cell {
+            font-family: 'Courier New', monospace;
+            font-size: 0.7rem;
+        }
+        .avg-time {
+            background: #e7f4e4;
+            border-left: 3px solid #28a745;
+            padding: 0.2rem 0.4rem;
+            font-size: 0.7rem;
+            margin-top: 0.3rem;
+        }
+        .no-data {
+            text-align: center;
+            color: #6c757d;
+            padding: 1rem;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-2">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="mb-0 text-muted">
+                <i class="fas fa-clock me-1"></i>Processing Times (Last {{ days }} Days)
+            </h6>
+            <div>
+                <a href="/details/{{ client }}/{{ region }}" class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>Back
+                </a>
+            </div>
+        </div>
+
+        <!-- Client/Region Badges -->
+        <div class="d-flex gap-1 mb-2">
+            <span class="badge bg-primary">{{ client }}</span>
+            <span class="badge bg-secondary">{{ region }}</span>
+        </div>
+
+        <!-- Summary Statistics -->
+        <div class="stats-grid mb-2">
+            <div class="stat-item">
+                <div class="stat-number">{{ processing_data.pricing_marker|length }}</div>
+                <div class="stat-label">Pricing</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">{{ processing_data.eod|length }}</div>
+                <div class="stat-label">EOD</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">{{ processing_data.aod|length }}</div>
+                <div class="stat-label">AOD</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">{{ processing_data.sod|length }}</div>
+                <div class="stat-label">SOD</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">{{ processing_data.ars|length }}</div>
+                <div class="stat-label">ARS</div>
+            </div>
+        </div>
+
+        <!-- Pricing Markers Section -->
+        <div class="compact-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Pricing Markers</span>
+                <span class="badge bg-light text-dark">
+                    {{ processing_data.pricing_marker|length }} records
+                </span>
+            </div>
+            <div class="card-body">
+                {% if processing_data.pricing_marker %}
+                {% set total_seconds = processing_data.pricing_marker|sum(attribute='processing_seconds') %}
+                {% set avg_seconds = total_seconds / processing_data.pricing_marker|length if processing_data.pricing_marker|length > 0 else 0 %}
+                <div class="avg-time">
+                    Avg: {{ (avg_seconds / 60)|round(1) }} min
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-micro">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Start</th>
+                                <th>End</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in processing_data.pricing_marker %}
+                            <tr>
+                                <td>{{ item.business_dt }}</td>
+                                <td class="time-cell">
+                                    {% if item.event_created %}
+                                        {{ item.event_created.strftime('%H:%M') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td class="time-cell">
+                                    {% if item.marker_created %}
+                                        {{ item.marker_created.strftime('%H:%M') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge bg-info time-badge">
+                                        {{ (item.processing_seconds / 60)|round(1) }}m
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="no-data">No pricing marker data available</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- EOD Workflows Section -->
+        <div class="compact-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>EOD Workflows</span>
+                <span class="badge bg-light text-dark">
+                    {{ processing_data.eod|length }} records
+                </span>
+            </div>
+            <div class="card-body">
+                {% if processing_data.eod %}
+                {% set total_seconds = processing_data.eod|sum(attribute='processing_seconds') %}
+                {% set avg_seconds = total_seconds / processing_data.eod|length if processing_data.eod|length > 0 else 0 %}
+                <div class="avg-time">
+                    Avg: {{ (avg_seconds / 60)|round(1) }} min
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-micro">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Start</th>
+                                <th>End</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in processing_data.eod %}
+                            <tr>
+                                <td>{{ item.business_dt }}</td>
+                                <td class="time-cell">
+                                    {% if item.workflow_start %}
+                                        {{ item.workflow_start.strftime('%H:%M') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td class="time-cell">
+                                    {% if item.workflow_end %}
+                                        {{ item.workflow_end.strftime('%H:%M') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge bg-success time-badge">
+                                        {{ (item.processing_seconds / 60)|round(1) }}m
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="no-data">No EOD workflow data available</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- ARS Workflows Section -->
+        <div class="compact-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>ARS Workflows</span>
+                <span class="badge bg-light text-dark">
+                    {{ processing_data.ars|length }} records
+                </span>
+            </div>
+            <div class="card-body">
+                {% if processing_data.ars %}
+                <div class="table-responsive">
+                    <table class="table table-micro">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Start</th>
+                                <th>End</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in processing_data.ars %}
+                            <tr>
+                                <td>{{ item.business_dt }}</td>
+                                <td>
+                                    <span class="badge bg-secondary" style="font-size: 0.6rem;">
+                                        {{ item.trigger_marker_type_cd|replace('opsRegionEOD', '')|replace('Signoff', '')|truncate(12) }}
+                                    </span>
+                                </td>
+                                <td class="time-cell">
+                                    {% if item.workflow_start %}
+                                        {{ item.workflow_start.strftime('%H:%M') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td class="time-cell">
+                                    {% if item.workflow_end %}
+                                        {{ item.workflow_end.strftime('%H:%M') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge bg-warning time-badge">
+                                        {{ (item.processing_seconds / 60)|round(1) }}m
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="no-data">No ARS workflow data available</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- AOD & SOD Sections -->
+        <div class="compact-card">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#aodSodSection" style="cursor: pointer;">
+                <span>AOD & SOD Workflows</span>
+                <i class="fas fa-chevron-down float-end"></i>
+            </div>
+            <div class="collapse" id="aodSodSection">
+                <div class="card-body">
+                    <!-- AOD Workflows -->
+                    <div class="section-title">AOD Workflows</div>
+                    {% if processing_data.aod %}
+                    {% set total_seconds = processing_data.aod|sum(attribute='processing_seconds') %}
+                    {% set avg_seconds = total_seconds / processing_data.aod|length if processing_data.aod|length > 0 else 0 %}
+                    <div class="avg-time">
+                        Avg: {{ (avg_seconds / 60)|round(1) }} min
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-micro">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Start</th>
+                                    <th>End</th>
+                                    <th>Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in processing_data.aod %}
+                                <tr>
+                                    <td>{{ item.business_dt }}</td>
+                                    <td class="time-cell">
+                                        {% if item.workflow_start %}
+                                            {{ item.workflow_start.strftime('%H:%M') }}
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                    <td class="time-cell">
+                                        {% if item.workflow_end %}
+                                            {{ item.workflow_end.strftime('%H:%M') }}
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-primary time-badge">
+                                            {{ (item.processing_seconds / 60)|round(1) }}m
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="no-data">No AOD workflow data available</div>
+                    {% endif %}
+
+                    <!-- SOD Workflows -->
+                    <div class="section-title mt-2">SOD Workflows</div>
+                    {% if processing_data.sod %}
+                    {% set total_seconds = processing_data.sod|sum(attribute='processing_seconds') %}
+                    {% set avg_seconds = total_seconds / processing_data.sod|length if processing_data.sod|length > 0 else 0 %}
+                    <div class="avg-time">
+                        Avg: {{ (avg_seconds / 60)|round(1) }} min
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-micro">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Start</th>
+                                    <th>End</th>
+                                    <th>Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in processing_data.sod %}
+                                <tr>
+                                    <td>{{ item.business_dt }}</td>
+                                    <td class="time-cell">
+                                        {% if item.workflow_start %}
+                                            {{ item.workflow_start.strftime('%H:%M') }}
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                    <td class="time-cell">
+                                        {% if item.workflow_end %}
+                                            {{ item.workflow_end.strftime('%H:%M') }}
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-dark time-badge">
+                                            {{ (item.processing_seconds / 60)|round(1) }}m
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="no-data">No SOD workflow data available</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
