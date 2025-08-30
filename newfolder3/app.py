@@ -135,13 +135,16 @@ def get_all_clients_regions():
 @app.route('/api/batch_status')
 @cached(ttl=60)  # Cache for 1 minute
 def get_batch_status():
-    business_date = request.args.get('business_date')
+    business_date_str = request.args.get('business_date')
     client_filter = request.args.get('client')  # Get client filter from request
     
-    if not business_date:
+    if not business_date_str:
         return jsonify({"status": "error", "message": "business_date parameter is required"}), 400
 
     try:
+        # Normalize to Python date
+        business_date = datetime.strptime(business_date_str, "%Y-%m-%d").date()
+
         # Get all client/region combinations
         clients_regions = get_all_clients_regions()
         
@@ -175,7 +178,7 @@ def get_batch_status():
             "status": "success",
             "data": sorted_response,
             "timestamp": datetime.now().isoformat(),
-            "business_date": business_date,
+            "business_date": business_date_str,  # return original string for UI
             "client_filter": client_filter if client_filter else 'ALL'
         })
 
@@ -190,9 +193,12 @@ def dashboard():
 
 @app.route('/details/<client>/<region>')
 def details(client, region):
-    business_date = request.args.get('business_date', datetime.now().strftime('%Y-%m-%d'))
+    business_date_str = request.args.get('business_date', datetime.now().strftime('%Y-%m-%d'))
 
     try:
+        # Normalize to Python date
+        business_date = datetime.strptime(business_date_str, "%Y-%m-%d").date()
+
         # Get all workflows for this client/region in batch
         clients_regions = [(client, region)]
 
@@ -204,9 +210,7 @@ def details(client, region):
             'sod_ars', 'sod', 'sod_marker'
         ]
 
-        standard_statuses = get_batch_workflow_status(
-            clients_regions, standard_workflows, business_date
-        )
+        standard_statuses = get_batch_workflow_status(clients_regions, standard_workflows, business_date)
 
         # Get pricing workflow statuses in batch
         pricing_statuses = get_batch_pricing_workflow_status(clients_regions, business_date)
@@ -226,15 +230,14 @@ def details(client, region):
         # Sort workflows according to the defined order
         sorted_workflows = sort_workflows(all_workflows)
 
-        sod_date = calculate_sod_date(business_date)
+        sod_date = calculate_sod_date(business_date_str)
 
-        # Get reporting loaders status for different snapshot types
+        # Get reporting loaders status
         reporting_loaders_eodpx = get_reporting_loaders_status(client, region, business_date, 'EODPX')
         reporting_loaders_eod = get_reporting_loaders_status(client, region, business_date, 'EOD')
         reporting_loaders_aod = get_reporting_loaders_status(client, region, business_date, 'AOD')
         reporting_loaders_sod = get_reporting_loaders_status(client, region, sod_date, 'SOD')
 
-        # Combine all reporting loaders by snapshot type
         reporting_loaders = {
             'EODPX': reporting_loaders_eodpx,
             'EOD': reporting_loaders_eod,
@@ -246,7 +249,7 @@ def details(client, region):
             'details.html',
             client=client,
             region=region,
-            business_date=business_date,
+            business_date=business_date_str,
             sod_date=sod_date,
             workflows=sorted_workflows,
             reporting_loaders=reporting_loaders
@@ -258,18 +261,19 @@ def details(client, region):
             'details.html',
             client=client,
             region=region,
-            business_date=business_date,
+            business_date=business_date_str,
             workflows=[],
             reporting_loaders={}
         )
 
+
 @app.route('/api/pricing_workflows')
 def pricing_workflows():
-    business_date = request.args.get('business_date')
+    business_date_str = request.args.get('business_date')
     client = request.args.get('client')
     region = request.args.get('region')
 
-    if not all([business_date, client, region]):
+    if not all([business_date_str, client, region]):
         return jsonify({
             "status": "error",
             "message": "business_date, client, and region parameters are required",
@@ -277,6 +281,9 @@ def pricing_workflows():
         }), 400
 
     try:
+        # Normalize to Python date
+        business_date = datetime.strptime(business_date_str, "%Y-%m-%d").date()
+
         # First get message IDs from ATLS
         message_ids_query = """
             SELECT original_message_id
@@ -294,28 +301,26 @@ def pricing_workflows():
             })
             message_ids = [row[0] for row in result.fetchall()]
 
-        # Then get workflow statuses from ADM for each message ID using combined query
+        # Then get workflow statuses from ADM
         workflows = []
         for message_id in message_ids:
             adm_workflows = get_combined_workflow_status(message_id=message_id)
             for workflow in adm_workflows:
-                # Only include pricing workflows
                 if workflow['workflow_type'].startswith('pricing_'):
                     workflow.update({
                         'client_cd': client,
                         'processing_region_cd': region,
-                        'business_dt': business_date
+                        'business_dt': business_date_str
                     })
                     workflows.append(workflow)
 
-        # Sort workflows by order
         sorted_workflows = sort_workflows(workflows)
 
         return jsonify({
             "status": "success",
             "data": sorted_workflows,
             "timestamp": datetime.now().isoformat(),
-            "business_date": business_date
+            "business_date": business_date_str
         })
 
     except Exception as e:
