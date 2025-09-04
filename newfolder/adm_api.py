@@ -8,11 +8,12 @@ from database.connectors import get_adm_engine, get_atls_engine
 """
 adm_api.py
 - Optimized with pre-grouping (for large UNION results ~50k rows)
-- Stage-specific marker_type_cd filtering (prevents cross-stage leakage)
+- Stage-specific marker_type_cd filtering (supports subject-specific MART markers)
 - Robust ATLS↔ADM matching with canonicalization of keys
 - Rich diagnostics & timings (DB time, grouping time, per-stage processing time)
 - Detailed ATLS logs (separate Accounting vs Pricing original_message_id lists)
 - Optional ADM fallback when ATLS message IDs are missing but stage markers exist
+- SQL builder supports optional client/region filters so details view queries only needed rows
 """
 
 logger = logging.getLogger(__name__)
@@ -70,9 +71,8 @@ EXPECTED_SUBJECTS = {
     "sod_final": ["positions", "taxlots", "transactions", "cash_settlements", "disposal_lots"]
 }
 
-# Stage → marker_type_cd mapping (strict filtering per stage)
-# For MART stages, your environment uses subject-specific marker types.
-# We'll allow a SET of valid mart markers per snapshot.
+# Stage → marker_type_cd filtering
+# For MART stages, your environment uses subject-specific marker types (set of allowed values).
 STAGE_MARKER_FILTERS = {
     # EOD
     ("EOD", "RAW"): "eodRegionSubjectAreaRawLoadComplete",
@@ -145,10 +145,24 @@ def _norm_date(d) -> str:
     return str(d)
 
 # ----------------------------------
-# SQL builder
+# SQL builder (now supports optional client/region filters)
 # ----------------------------------
 
-def get_combined_workflow_sql(business_date: str, sod_date: str) -> str:
+def get_combined_workflow_sql(business_date: str, sod_date: str, client: str = None, region: str = None) -> str:
+    # For markers + error_logs (joined with markers)
+    base_m = f"m.business_dt IN ('{business_date}', '{sod_date}')"
+    if client:
+        base_m += f" AND m.client_cd = '{client}'"
+    if region:
+        base_m += f" AND m.processing_region_cd = '{region}'"
+
+    # For final_markers JSON
+    base_fm = f"CAST(fm.marker->'payload'->>'business_date' AS date) IN ('{business_date}', '{sod_date}')"
+    if client:
+        base_fm += f" AND fm.marker->'header'->>'party_cd' = '{client}'"
+    if region:
+        base_fm += f" AND fm.marker->'header'->>'processing_region_cd' = '{region}'"
+
     return f"""
 SELECT
     m.created_at AS last_updated,
@@ -161,7 +175,7 @@ SELECT
     CAST(m.business_dt AS date) AS business_dt,
     'success' AS status
 FROM markers m
-WHERE m.business_dt IN ('{business_date}', '{sod_date}')
+WHERE {base_m}
 
 UNION ALL
 
@@ -176,7 +190,7 @@ SELECT
     CAST(fm.marker->'payload'->>'business_date' AS date) AS business_dt,
     'success' AS status
 FROM final_markers fm
-WHERE CAST(fm.marker->'payload'->>'business_date' AS date) IN ('{business_date}', '{sod_date}')
+WHERE {base_fm}
 
 UNION ALL
 
@@ -192,7 +206,7 @@ SELECT
     'failed' AS status
 FROM error_logs el
 JOIN markers m ON el.original_message_id = m.original_message_id
-WHERE m.business_dt IN ('{business_date}', '{sod_date}')
+WHERE {base_m}
 """
 
 # ----------------------------------
@@ -262,7 +276,6 @@ def get_atls_message_ids(business_date: str, sod_date: str):
     """
     message_ids_map = defaultdict(list)
 
-    # Helper to collect + log per-source
     def _fetch_source(conn, table, params):
         q = text(f"""
             SELECT client_cd, processing_region_cd, snapshot_type_cd, business_dt, original_message_id
@@ -272,7 +285,7 @@ def get_atls_message_ids(business_date: str, sod_date: str):
         t0 = time.time()
         rows = conn.execute(q, params).mappings().all()
         dur = time.time() - t0
-        logger.info(f"ATLS fetch from {table}: {len(rows)} rows in {dur:.2f}s for {params}")
+        logger.info("ATLS fetch from %s: %d rows in %.2fs for %s", table, len(rows), dur, params)
         return rows
 
     try:
@@ -281,7 +294,6 @@ def get_atls_message_ids(business_date: str, sod_date: str):
             acc_rows = _fetch_source(conn, "accounting_events", params)
             prc_rows = _fetch_source(conn, "pricing_events", params)
 
-            # Normalize & load to map with source labels
             def _ingest(rows, source):
                 for r in rows:
                     client = _norm_client(r["client_cd"])
@@ -301,14 +313,12 @@ def get_atls_message_ids(business_date: str, sod_date: str):
             _ingest(acc_rows, "ACCOUNTING")
             _ingest(prc_rows, "PRICING")
 
-            # Log summary per (client, region, snapshot, date)
             summary = defaultdict(lambda: {"ACCOUNTING": [], "PRICING": []})
             for (client, region), items in message_ids_map.items():
                 for it in items:
                     key = (client, region, it["snapshot"], it["business_dt"]) 
                     summary[key][it["source"].upper()].append(it["id"])
 
-            # Print a concise summary
             for (client, region, snap, bdt), src_map in summary.items():
                 acc_ids = src_map["ACCOUNTING"]
                 prc_ids = src_map["PRICING"]
@@ -319,7 +329,7 @@ def get_atls_message_ids(business_date: str, sod_date: str):
                     len(prc_ids), f" sample={prc_ids[:3]}" if prc_ids else "",
                 )
     except Exception as e:
-        logger.error(f"Error getting message IDs from ATLS: {e}")
+        logger.error("Error getting message IDs from ATLS: %s", e)
 
     return message_ids_map
 
@@ -351,14 +361,14 @@ def calculate_sod_date(business_date: str) -> str:
     return sod_date.strftime("%Y-%m-%d")
 
 
-def get_combined_workflow_sql_rows(business_date: str, sod_date: str):
-    sql = get_combined_workflow_sql(business_date, sod_date)
+def get_combined_workflow_sql_rows(business_date: str, sod_date: str, client: str = None, region: str = None):
+    sql = get_combined_workflow_sql(business_date, sod_date, client, region)
     t0 = time.time()
     with get_adm_engine().connect() as conn:
         result = conn.execute(text(sql))
         rows = [dict(row) for row in result.mappings()]
     dur = time.time() - t0
-    logger.info("ADM combined SQL fetched %d rows in %.2fs", len(rows), dur)
+    logger.info("ADM combined SQL fetched %d rows in %.2fs (client=%s, region=%s)", len(rows), dur, client, region)
     return rows
 
 
@@ -366,11 +376,18 @@ def get_combined_workflow_status(clients_regions, business_date):
     sod_date = calculate_sod_date(business_date)
     logger.info("Running ADM workflow for business_date=%s, sod_date=%s", business_date, sod_date)
 
+    # If a single (client, region) is requested, apply SQL-side filters
+    client_filter = region_filter = None
+    if len(clients_regions) == 1:
+        client_filter, region_filter = clients_regions[0]
+        client_filter = client_filter if client_filter else None
+        region_filter = region_filter if region_filter else None
+
     # ATLS IDs (with logs per source)
     atls_message_map = get_atls_message_ids(business_date, sod_date)
 
     # ADM rows
-    all_rows = get_combined_workflow_sql_rows(business_date, sod_date)
+    all_rows = get_combined_workflow_sql_rows(business_date, sod_date, client_filter, region_filter)
 
     # Group once
     t_group = time.time()
@@ -451,7 +468,7 @@ def get_combined_workflow_status(clients_regions, business_date):
             missing = list(set(expected_subjects) - set(subjects_found))
 
             # Timestamps for long-running
-            first_event_time = min([r["last_updated"] for r in workflow_rows if r.get("last_updated")], default=None)
+            first_event_time = min([r.get("last_updated") for r in workflow_rows if r.get("last_updated")], default=None)
 
             # Decide status
             if snapshot == "AOD":
@@ -481,13 +498,8 @@ def get_combined_workflow_status(clients_regions, business_date):
                         status = "failed"
 
             # Assemble response entry
-            last_updated = max([r["last_updated"] for r in workflow_rows if r.get("last_updated")], default=None)
-            first_oid = None
-            if message_ids:
-                first_oid = message_ids[0]
-            else:
-                # If still empty, try to surface an ID from ADM rows
-                first_oid = next((r.get("original_message_id") for r in workflow_rows if r.get("original_message_id")), None)
+            last_updated = max([r.get("last_updated") for r in workflow_rows if r.get("last_updated")], default=None)
+            first_oid = message_ids[0] if message_ids else next((r.get("original_message_id") for r in workflow_rows if r.get("original_message_id")), None)
 
             workflows.append({
                 "client_cd": client,
