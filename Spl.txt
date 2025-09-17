@@ -1,0 +1,46 @@
+search index=fxr "success uploaded \".io.servers.sshd.BizSSHVirtualFileSystem\""
+| rex field=source "(?i)GOSTAR_(?<extract>[^_\/]+)_(?<client>[^_\/]+)_(?<region>[^_\/]+)"
+    /* if your file path uses dashes or different separators, adjust the regex */
+| eval client = upper(client), region = upper(region), extract = upper(extract)
+| lookup inputlookinternal.csv Client AS client OUTPUT region AS lookup_region extract AS lookup_extract SLA AS sla
+/* If lookup has mixed case, you may want to uppercase lookup fields first in lookup file or handle via eval */
+| where isnotnull(sla) OR (client!="" AND extract!="") 
+/* Group by the key fields and compute counts & first delivery */
+| stats count min(_time) as delivery_epoch by client region extract sla
+| eval delivery_time = if(isnull(delivery_epoch), \"\", strftime(delivery_epoch, \"%H:%M\"))
+/* SLA to seconds */
+| eval sla_hour = tonumber(mvindex(split(sla,\":\"),0)), sla_min = tonumber(mvindex(split(sla,\":\"),1))
+| eval sla_seconds = sla_hour*3600 + sla_min*60
+| eval day_midnight = relative_time(delivery_epoch, \"@d\")
+| eval sla_epoch = day_midnight + sla_seconds
+| eval sla_epoch = if(sla_epoch > (delivery_epoch + 43200), sla_epoch - 86400, sla_epoch)
+| eval sla_breached = if(isnull(delivery_epoch), \"Yes\", if(delivery_epoch <= sla_epoch, \"No\", \"Yes\"))
+| eval status = if(count>0, \"Success\", \"\")
+| table client region extract count delivery_time sla sla_breached status
+
+
+
+
+| inputlookup inputlookinternal.csv
+| rename Client as client, region as region, extract as extract, SLA as sla
+| eval client_u = upper(client), region_u = upper(region), extract_u = upper(extract)
+| eval index_pattern = "*GOSTAR_" . extract_u . "_" . client_u . "_" . region_u . "*"
+| map maxsearches=1000 search="
+    search index=fxr $index_pattern$ success uploaded \".io.servers.sshd.BizSSHVirtualFileSystem\"
+    | eval client=\"$client$\", region=\"$region$\", extract=\"$extract$\", sla=\"$sla$\"
+    | stats count min(_time) as delivery_epoch by client region extract sla
+    | eval delivery_time = if(isnull(delivery_epoch), \"\", strftime(delivery_epoch, \"%H:%M\"))
+    /* SLA to seconds */
+    | eval sla_hour = tonumber(mvindex(split(sla,\":\"),0)), sla_min = tonumber(mvindex(split(sla,\":\"),1))
+    | eval sla_seconds = sla_hour*3600 + sla_min*60
+    /* delivery seconds since midnight */
+    | eval delivery_hour = tonumber(strftime(delivery_epoch, \"%H\")), delivery_min = tonumber(strftime(delivery_epoch, \"%M\"))
+    | eval delivery_seconds = delivery_hour*3600 + delivery_min*60
+    | eval day_midnight = relative_time(delivery_epoch, \"@d\")
+    | eval sla_epoch = day_midnight + sla_seconds
+    /* if SLA epoch is > delivery + 12h, assume SLA refers to previous day (handles 23:59 vs 01:10) */
+    | eval sla_epoch = if(sla_epoch > (delivery_epoch + 43200), sla_epoch - 86400, sla_epoch)
+    | eval sla_breached = if(isnull(delivery_epoch), \"Yes\", if(delivery_epoch <= sla_epoch, \"No\", \"Yes\"))
+    | eval status = if(count>0, \"Success\", \"\")
+" 
+| table client region extract count delivery_time sla sla_breached status
